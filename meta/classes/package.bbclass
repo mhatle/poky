@@ -652,7 +652,12 @@ def runtime_mapping_rename (varname, pkg, d):
     #bb.note("%s before: %s" % (varname, d.getVar(varname)))
 
     new_depends = {}
-    deps = bb.utils.explode_dep_versions2(d.getVar(varname) or "")
+    localdata = d.createCopy()
+    for exclude_var in (d.getVar('PKGDATA_VARS_NOHASH') or "").split():
+        # Remove the variable so it expands fully
+        localdata.delVar(exclude_var)
+
+    deps = bb.utils.explode_dep_versions2(localdata.getVar(varname) or "")
     for depend, depversions in deps.items():
         new_depend = get_package_mapping(depend, pkg, d, depversions)
         if depend != new_depend:
@@ -1486,8 +1491,13 @@ python package_fixsymlinks () {
             if found == False:
                 bb.note("%s contains dangling symlink to %s" % (pkg, l))
 
+    localdata = d.createCopy()
+    for exclude_var in (d.getVar('PKGDATA_VARS_NOHASH') or "").split():
+        # Remove the variable so it expands fully
+        localdata.delVar(exclude_var)
+
     for pkg in newrdepends:
-        rdepends = bb.utils.explode_dep_versions2(d.getVar('RDEPENDS_' + pkg) or "")
+        rdepends = bb.utils.explode_dep_versions2(localdata.getVar('RDEPENDS_' + pkg) or "")
         for p in newrdepends[pkg]:
             if p not in rdepends:
                 rdepends[p] = []
@@ -1509,6 +1519,8 @@ EXPORT_FUNCTIONS package_name_hook
 PKGDESTWORK = "${WORKDIR}/pkgdata"
 
 PKGDATA_VARS = "PN PE PV PR PKGE PKGV PKGR LICENSE DESCRIPTION SUMMARY RDEPENDS RPROVIDES RRECOMMENDS RSUGGESTS RREPLACES RCONFLICTS SECTION PKG ALLOW_EMPTY FILES CONFFILES FILES_INFO PACKAGE_ADD_METADATA pkg_postinst pkg_postrm pkg_preinst pkg_prerm"
+
+PKGDATA_VARS_NOHASH = "EXTENDPRAUTO"
 
 python emit_pkgdata() {
     from glob import glob
@@ -1548,7 +1560,7 @@ fi
                     scriptlet = "set -e\n" + "\n".join(scriptlet_split[0:])
             d.setVar('%s_%s' % (scriptlet_name, pkg), scriptlet)
 
-    def write_if_exists(f, pkg, var):
+    def write_if_exists(d, f, pkg, var):
         def encode(str):
             import codecs
             c = codecs.getencoder("unicode_escape")
@@ -1621,17 +1633,29 @@ fi
         add_set_e_to_scriptlets(pkg)
 
         subdata_file = pkgdatadir + "/runtime/%s" % pkg
+
+        # Write out nohash variables first
+        with open("%s.oe_nohash" % subdata_file, 'w') as sf:
+            for var in (d.getVar('PKGDATA_VARS_NOHASH') or "").split():
+                write_if_exists(d, sf, pkg, var)
+
+        # Write out regular variables, but sanitize nohash values
         with open(subdata_file, 'w') as sf:
+            localdata = d.createCopy()
+            for exclude_var in (d.getVar('PKGDATA_VARS_NOHASH') or "").split():
+                # Remove the variable so it expands fully
+                localdata.delVar(exclude_var)
+
             for var in (d.getVar('PKGDATA_VARS') or "").split():
-                val = write_if_exists(sf, pkg, var)
+                write_if_exists(localdata, sf, pkg, var)
 
-            write_if_exists(sf, pkg, 'FILERPROVIDESFLIST')
-            for dfile in (d.getVar('FILERPROVIDESFLIST_' + pkg) or "").split():
-                write_if_exists(sf, pkg, 'FILERPROVIDES_' + dfile)
+            write_if_exists(localdata, sf, pkg, 'FILERPROVIDESFLIST')
+            for dfile in (localdata.getVar('FILERPROVIDESFLIST_' + pkg) or "").split():
+                write_if_exists(localdata, sf, pkg, 'FILERPROVIDES_' + dfile)
 
-            write_if_exists(sf, pkg, 'FILERDEPENDSFLIST')
-            for dfile in (d.getVar('FILERDEPENDSFLIST_' + pkg) or "").split():
-                write_if_exists(sf, pkg, 'FILERDEPENDS_' + dfile)
+            write_if_exists(localdata, sf, pkg, 'FILERDEPENDSFLIST')
+            for dfile in (localdata.getVar('FILERDEPENDSFLIST_' + pkg) or "").split():
+                write_if_exists(localdata, sf, pkg, 'FILERDEPENDS_' + dfile)
 
             sf.write('%s_%s: %d\n' % ('PKGSIZE', pkg, total_size))
 
@@ -2126,9 +2150,14 @@ def read_libdep_files(d):
 python read_shlibdeps () {
     pkglibdeps = read_libdep_files(d)
 
+    localdata = d.createCopy()
+    for exclude_var in (d.getVar('PKGDATA_VARS_NOHASH') or "").split():
+        # Remove the variable so it expands fully
+        localdata.delVar(exclude_var)
+
     packages = d.getVar('PACKAGES').split()
     for pkg in packages:
-        rdepends = bb.utils.explode_dep_versions2(d.getVar('RDEPENDS_' + pkg) or "")
+        rdepends = bb.utils.explode_dep_versions2(localdata.getVar('RDEPENDS_' + pkg) or "")
         for dep in sorted(pkglibdeps[pkg]):
             # Add the dep if it's not already there, or if no comparison is set
             if dep not in rdepends:
@@ -2158,9 +2187,13 @@ python package_depchains() {
     prefixes  = (d.getVar('DEPCHAIN_PRE') or '').split()
 
     def pkg_adddeprrecs(pkg, base, suffix, getname, depends, d):
+        localdata = d.createCopy()
+        for exclude_var in (d.getVar('PKGDATA_VARS_NOHASH') or "").split():
+            # Remove the variable so it expands fully
+            localdata.delVar(exclude_var)
 
         #bb.note('depends for %s is %s' % (base, depends))
-        rreclist = bb.utils.explode_dep_versions2(d.getVar('RRECOMMENDS_' + pkg) or "")
+        rreclist = bb.utils.explode_dep_versions2(localdata.getVar('RRECOMMENDS_' + pkg) or "")
 
         for depend in sorted(depends):
             if depend.find('-native') != -1 or depend.find('-cross') != -1 or depend.startswith('virtual/'):
@@ -2179,9 +2212,13 @@ python package_depchains() {
         d.setVar('RRECOMMENDS_%s' % pkg, bb.utils.join_deps(rreclist, commasep=False))
 
     def pkg_addrrecs(pkg, base, suffix, getname, rdepends, d):
+        localdata = d.createCopy()
+        for exclude_var in (d.getVar('PKGDATA_VARS_NOHASH') or "").split():
+            # Remove the variable so it expands fully
+            localdata.delVar(exclude_var)
 
         #bb.note('rdepends for %s is %s' % (base, rdepends))
-        rreclist = bb.utils.explode_dep_versions2(d.getVar('RRECOMMENDS_' + pkg) or "")
+        rreclist = bb.utils.explode_dep_versions2(localdata.getVar('RRECOMMENDS_' + pkg) or "")
 
         for depend in sorted(rdepends):
             if depend.find('virtual-locale-') != -1:

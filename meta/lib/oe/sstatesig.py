@@ -589,6 +589,8 @@ def OEOuthashBasic(path, sigfile, task, d):
             # Process this directory and all its child files
             process(root)
             for f in files:
+                if f.endswith('.oe_nohash'):
+                    continue
                 if f == 'fixmepath':
                     continue
                 process(os.path.join(root, f))

@@ -99,6 +99,7 @@ python buildhistory_emit_pkghistory() {
     import json
     import shlex
     import errno
+    import oe.packagedata
 
     pkghistdir = d.getVar('BUILDHISTORY_DIR_PACKAGE')
     oldpkghistdir = d.getVar('BUILDHISTORY_OLD_DIR_PACKAGE')
@@ -127,6 +128,7 @@ python buildhistory_emit_pkghistory() {
             self.pkge = ""
             self.pkgv = ""
             self.pkgr = ""
+            self.extendprauto = ""
             self.size = 0
             self.depends = ""
             self.rprovides = ""
@@ -163,6 +165,8 @@ python buildhistory_emit_pkghistory() {
                     pkginfo.pkgv = value
                 elif name == "PKGR":
                     pkginfo.pkgr = value
+                elif name == "EXTENDPRAUTO":
+                    pkginfo.extendprauto = value
                 elif name == "RPROVIDES":
                     pkginfo.rprovides = value
                 elif name == "RDEPENDS":
@@ -260,18 +264,21 @@ python buildhistory_emit_pkghistory() {
 
     pkgdest = d.getVar('PKGDEST')
     for pkg in packagelist:
-        pkgdata = {}
-        with open(os.path.join(pkgdata_dir, 'runtime', pkg)) as f:
-            for line in f.readlines():
-                item = line.rstrip('\n').split(': ', 1)
-                key = item[0]
-                if key.endswith('_' + pkg):
-                    key = key[:-len(pkg)-1]
-                pkgdata[key] = item[1].encode('latin-1').decode('unicode_escape')
+        pkgdata = oe.packagedata.read_pkgdatafile(os.path.join(pkgdata_dir, 'runtime', pkg))
+
+        npkgdata = {}
+        for key in pkgdata.keys():
+            if key.endswith('_' + pkg):
+                nkey = key[:-len(pkg)-1]
+                npkgdata[nkey] = pkgdata[key]
+
+        for key in npkgdata.keys():
+          pkgdata[key] = npkgdata[key]
 
         pkge = pkgdata.get('PKGE', '0')
         pkgv = pkgdata['PKGV']
         pkgr = pkgdata['PKGR']
+        extendprauto = pkgdata['EXTENDPRAUTO']
         #
         # Find out what the last version was
         # Make sure the version did not decrease
@@ -295,6 +302,7 @@ python buildhistory_emit_pkghistory() {
         pkginfo.pkge = pkge
         pkginfo.pkgv = pkgv
         pkginfo.pkgr = pkgr
+        pkginfo.extendprauto = extendprauto
         pkginfo.rprovides = sortpkglist(oe.utils.squashspaces(pkgdata.get('RPROVIDES', "")))
         pkginfo.rdepends = sortpkglist(oe.utils.squashspaces(pkgdata.get('RDEPENDS', "")))
         pkginfo.rrecommends = sortpkglist(oe.utils.squashspaces(pkgdata.get('RRECOMMENDS', "")))
@@ -398,6 +406,8 @@ def write_pkghistory(pkginfo, d):
             f.write(u"PKGV = %s\n" % pkginfo.pkgv)
         if pkginfo.pkgr != pkginfo.pr:
             f.write(u"PKGR = %s\n" % pkginfo.pkgr)
+        if pkginfo.extendprauto:
+            f.write(u"EXTENDPRAUTO = %s\n" % pkginfo.extendprauto)
         f.write(u"RPROVIDES = %s\n" %  pkginfo.rprovides)
         f.write(u"RDEPENDS = %s\n" %  pkginfo.rdepends)
         f.write(u"RRECOMMENDS = %s\n" %  pkginfo.rrecommends)

@@ -15,7 +15,7 @@ def read_pkgdatafile(fn):
         c = codecs.getdecoder("unicode_escape")
         return c(str)[0]
 
-    if os.access(fn, os.R_OK):
+    def load_file(fn):
         import re
         with open(fn, 'r') as f:
             lines = f.readlines()
@@ -24,6 +24,12 @@ def read_pkgdatafile(fn):
             m = r.match(l)
             if m:
                 pkgdata[m.group(1)] = decode(m.group(2))
+
+    if os.access("%s.oe_nohash" % fn, os.R_OK):
+        load_file("%s.oe_nohash" % fn)
+
+    if os.access(fn, os.R_OK):
+        load_file(fn)
 
     return pkgdata
 
