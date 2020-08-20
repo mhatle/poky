@@ -7,7 +7,7 @@
 #
 # There are the following default steps but PACKAGEFUNCS can be extended:
 #
-# a) package_get_auto_pr - get PRAUTO from remote PR service
+# a) package_convert_pr_autoinc - convert AUTOINC in PKGV to ${PRSERV_PV_AUTOINC}
 #
 # b) perform_packagecopy - Copy D into PKGD
 #
@@ -666,6 +666,18 @@ def runtime_mapping_rename (varname, pkg, d):
 #
 # Package functions suitable for inclusion in PACKAGEFUNCS
 #
+
+python package_convert_pr_autoinc() {
+    pkgv = d.getVar("PKGV")
+
+    # Adjust pkgv as necessary...
+    if 'AUTOINC' in pkgv:
+        d.setVar("PKGV", pkgv.replace("AUTOINC", "${PRSERV_PV_AUTOINC}"))
+
+    # Change PRSERV_PV_AUTOINC and EXTENDPRAUTO usage to special values
+    d.setVar('PRSERV_PV_AUTOINC', '@PRSERV_PV_AUTOINC@')
+    d.setVar('EXTENDPRAUTO', '@EXTENDPRAUTO@')
+}
 
 LOCALEBASEPN ??= "${PN}"
 
@@ -2285,7 +2297,7 @@ python do_package () {
         package_qa_handle_error("var-undefined", msg, d)
         return
 
-    bb.build.exec_func("package_get_auto_pr", d)
+    bb.build.exec_func("package_convert_pr_autoinc", d)
 
     ###########################################################################
     # Optimisations
@@ -2357,9 +2369,24 @@ addtask do_package_setscene
 # Copy from PKGDESTWORK to tempdirectory as tempdirectory can be cleaned at both
 # do_package_setscene and do_packagedata_setscene leading to races
 python do_packagedata () {
-    src = d.expand("${PKGDESTWORK}")
-    dest = d.expand("${WORKDIR}/pkgdata-pdata-input")
-    oe.path.copyhardlinktree(src, dest)
+    bb.build.exec_func("package_get_auto_pr", d)
+
+    bb.build.exec_func("packagedata_translate_pr_autoinc", d)
+}
+
+# Translate and 'copy' the PR info
+packagedata_translate_pr_autoinc() {
+    (
+     cd ${PKGDESTWORK}
+     mkdir -p ${WORKDIR}/pkgdata-pdata-input
+     for file in $(find . -type f) ; do
+         mkdir -p $(dirname ${WORKDIR}/pkgdata-pdata-input/$file)
+
+         sed -e 's,@PRSERV_PV_AUTOINC@,${PRSERV_PV_AUTOINC},g' \
+             -e 's,@EXTENDPRAUTO@,${EXTENDPRAUTO},g' \
+         < $file > ${WORKDIR}/pkgdata-pdata-input/$file
+     done
+    )
 }
 
 addtask packagedata before do_build after do_package
