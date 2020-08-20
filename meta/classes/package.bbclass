@@ -7,7 +7,7 @@
 #
 # There are the following default steps but PACKAGEFUNCS can be extended:
 #
-# a) package_get_auto_pr - get PRAUTO from remote PR service
+# a) package_convert_autoinc - convert AUTOINC in PKGV to ${PRSERV_PV_AUTOINC}
 #
 # b) perform_packagecopy - Copy D into PKGD
 #
@@ -648,11 +648,21 @@ def get_package_additional_metadata (pkg_type, d):
         metadata_fields = [field.strip() for field in oe.data.typed_value(key, d)]
         return "\n".join(metadata_fields).strip()
 
+# Remove the excluded variables from a copy of d
+# This ensures that any users will list these variables when expanded
+def exclude_pkgdata_vars(d):
+    localdata = d.createCopy()
+    for exclude_var in (d.getVar('PKGDATA_VARS_EXCLUDE') or "").split():
+        localdata.delVar(exclude_var)
+    return localdata
+
 def runtime_mapping_rename (varname, pkg, d):
     #bb.note("%s before: %s" % (varname, d.getVar(varname)))
 
     new_depends = {}
-    deps = bb.utils.explode_dep_versions2(d.getVar(varname) or "")
+    localdata = exclude_pkgdata_vars(d)
+
+    deps = bb.utils.explode_dep_versions2(localdata.getVar(varname) or "")
     for depend, depversions in deps.items():
         new_depend = get_package_mapping(depend, pkg, d, depversions)
         if depend != new_depend:
@@ -666,6 +676,13 @@ def runtime_mapping_rename (varname, pkg, d):
 #
 # Package functions suitable for inclusion in PACKAGEFUNCS
 #
+
+python package_convert_autoinc() {
+    pkgv = d.getVar("PKGV")
+
+    if 'AUTOINC' in pkgv:
+        d.setVar("PKGV", pkgv.replace("AUTOINC", "${PRSERV_PV_AUTOINC}"))
+}
 
 LOCALEBASEPN ??= "${PN}"
 
@@ -1436,8 +1453,10 @@ python package_fixsymlinks () {
             if found == False:
                 bb.note("%s contains dangling symlink to %s" % (pkg, l))
 
+    localdata = exclude_pkgdata_vars(d)
+
     for pkg in newrdepends:
-        rdepends = bb.utils.explode_dep_versions2(d.getVar('RDEPENDS_' + pkg) or "")
+        rdepends = bb.utils.explode_dep_versions2(localdata.getVar('RDEPENDS_' + pkg) or "")
         for p in newrdepends[pkg]:
             if p not in rdepends:
                 rdepends[p] = []
@@ -1459,6 +1478,12 @@ EXPORT_FUNCTIONS package_name_hook
 PKGDESTWORK = "${WORKDIR}/pkgdata"
 
 PKGDATA_VARS = "PN PE PV PR PKGE PKGV PKGR LICENSE DESCRIPTION SUMMARY RDEPENDS RPROVIDES RRECOMMENDS RSUGGESTS RREPLACES RCONFLICTS SECTION PKG ALLOW_EMPTY FILES CONFFILES FILES_INFO PACKAGE_ADD_METADATA pkg_postinst pkg_postrm pkg_preinst pkg_prerm"
+
+# When we write or use PKGDATA_VARS items, components of this may need
+# to be excluded from expansion.
+# Really we only care about PRAUTO, but EXTENDPRAUTO evaluates this, so
+# exclude it instead
+PKGDATA_VARS_EXCLUDE = "EXTENDPRAUTO PRSERV_PV_AUTOINC"
 
 python emit_pkgdata() {
     from glob import glob
@@ -1498,7 +1523,7 @@ fi
                     scriptlet = "set -e\n" + "\n".join(scriptlet_split[0:])
             d.setVar('%s_%s' % (scriptlet_name, pkg), scriptlet)
 
-    def write_if_exists(f, pkg, var):
+    def write_if_exists(d, f, pkg, var):
         def encode(str):
             import codecs
             c = codecs.getencoder("unicode_escape")
@@ -1572,16 +1597,18 @@ fi
 
         subdata_file = pkgdatadir + "/runtime/%s" % pkg
         with open(subdata_file, 'w') as sf:
+            localdata = exclude_pkgdata_vars(d)
+
             for var in (d.getVar('PKGDATA_VARS') or "").split():
-                val = write_if_exists(sf, pkg, var)
+                write_if_exists(localdata, sf, pkg, var)
 
-            write_if_exists(sf, pkg, 'FILERPROVIDESFLIST')
-            for dfile in (d.getVar('FILERPROVIDESFLIST_' + pkg) or "").split():
-                write_if_exists(sf, pkg, 'FILERPROVIDES_' + dfile)
+            write_if_exists(localdata, sf, pkg, 'FILERPROVIDESFLIST')
+            for dfile in (localdata.getVar('FILERPROVIDESFLIST_' + pkg) or "").split():
+                write_if_exists(localdata, sf, pkg, 'FILERPROVIDES_' + dfile)
 
-            write_if_exists(sf, pkg, 'FILERDEPENDSFLIST')
-            for dfile in (d.getVar('FILERDEPENDSFLIST_' + pkg) or "").split():
-                write_if_exists(sf, pkg, 'FILERDEPENDS_' + dfile)
+            write_if_exists(localdata, sf, pkg, 'FILERDEPENDSFLIST')
+            for dfile in (localdata.getVar('FILERDEPENDSFLIST_' + pkg) or "").split():
+                write_if_exists(localdata, sf, pkg, 'FILERDEPENDS_' + dfile)
 
             sf.write('%s_%s: %d\n' % ('PKGSIZE', pkg, total_size))
 
@@ -2076,9 +2103,11 @@ def read_libdep_files(d):
 python read_shlibdeps () {
     pkglibdeps = read_libdep_files(d)
 
+    localdata = exclude_pkgdata_vars(d)
+
     packages = d.getVar('PACKAGES').split()
     for pkg in packages:
-        rdepends = bb.utils.explode_dep_versions2(d.getVar('RDEPENDS_' + pkg) or "")
+        rdepends = bb.utils.explode_dep_versions2(localdata.getVar('RDEPENDS_' + pkg) or "")
         for dep in sorted(pkglibdeps[pkg]):
             # Add the dep if it's not already there, or if no comparison is set
             if dep not in rdepends:
@@ -2108,9 +2137,10 @@ python package_depchains() {
     prefixes  = (d.getVar('DEPCHAIN_PRE') or '').split()
 
     def pkg_adddeprrecs(pkg, base, suffix, getname, depends, d):
+        localdata = exclude_pkgdata_vars(d)
 
         #bb.note('depends for %s is %s' % (base, depends))
-        rreclist = bb.utils.explode_dep_versions2(d.getVar('RRECOMMENDS_' + pkg) or "")
+        rreclist = bb.utils.explode_dep_versions2(localdata.getVar('RRECOMMENDS_' + pkg) or "")
 
         for depend in sorted(depends):
             if depend.find('-native') != -1 or depend.find('-cross') != -1 or depend.startswith('virtual/'):
@@ -2129,9 +2159,10 @@ python package_depchains() {
         d.setVar('RRECOMMENDS_%s' % pkg, bb.utils.join_deps(rreclist, commasep=False))
 
     def pkg_addrrecs(pkg, base, suffix, getname, rdepends, d):
+        localdata = exclude_pkgdata_vars(d)
 
         #bb.note('rdepends for %s is %s' % (base, rdepends))
-        rreclist = bb.utils.explode_dep_versions2(d.getVar('RRECOMMENDS_' + pkg) or "")
+        rreclist = bb.utils.explode_dep_versions2(localdata.getVar('RRECOMMENDS_' + pkg) or "")
 
         for depend in sorted(rdepends):
             if depend.find('virtual-locale-') != -1:
@@ -2285,7 +2316,7 @@ python do_package () {
         package_qa_handle_error("var-undefined", msg, d)
         return
 
-    bb.build.exec_func("package_get_auto_pr", d)
+    bb.build.exec_func("package_convert_autoinc", d)
 
     ###########################################################################
     # Optimisations
@@ -2359,6 +2390,14 @@ addtask do_package_setscene
 python do_packagedata () {
     src = d.expand("${PKGDESTWORK}")
     dest = d.expand("${WORKDIR}/pkgdata-pdata-input")
+
+    bb.build.exec_func("package_get_auto_pr", d)
+    # Store this for later retrieval
+    data_file = src + d.expand("/${PN}_prservice")
+    with open(data_file, 'w') as fd:
+        fd.write('PRAUTO: %s\n' % d.getVar('PRAUTO'))
+        fd.write('PRSERV_PV_AUTOINC: %s\n' % d.getVar("PRSERV_PV_AUTOINC"))
+
     oe.path.copyhardlinktree(src, dest)
 }
 
